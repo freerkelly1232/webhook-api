@@ -26,16 +26,16 @@ const WEBHOOKS = {
 // ======== ROLE MENTIONS (OPTIONAL) ========
 // 🔧 EDIT HERE: Add your role IDs or leave blank ("") if you don't want mentions
 const ROLE_MENTIONS = {
-  "10m": "<@&your-role-id-here>",
-  "50m": "<@&your-role-id-here>",
-  "100m": "<@&your-role-id-here>",
-  "300m": "<@&your-role-id-here>",
-  "1b": "<@&your-role-id-here>"
+  "10m": "<@1444362655426023736>",
+  "50m": "<@1444362678276591656>",
+  "100m": "<@1444362687709450260>",
+  "300m": "<@1444362691077738636",
+  "1b": "<@1444362692734353479>"
 };
 
 // ======== HIGHLIGHT WEBHOOK ========
 // 🔧 EDIT HERE: Put your highlight webhook or leave empty if not used
-const HIGHLIGHT_WEBHOOK = "your-highlight-webhook-here";
+const HIGHLIGHT_WEBHOOK = "https://discord.com/api/webhooks/1441848571983953951/bZWTcN8pbV06-T8dELQG9y2AVV8SPl6xhYzI4nH9iCkHhGBUREHjWQvao82j9GnvHRaZ";
 
 // ======== PRIORITY NAMES ======
 // 🔧 EDIT HERE: Customize or remove these names as you wish
@@ -159,10 +159,10 @@ setInterval(async ()=>{
 
       const embed = {
         // 🔧 EDIT HERE: Change notifier name/title
-        title: priority ? `⚡ ${priority.name} — ${priority.gen}` : "⚡ YourNotifierNameHere",  
+        title: priority ? `⚡ ${priority.name} — ${priority.gen}` : "⚡ Xen Notifier ",  
         description: lines.join("\n"),
         color: tierKey === "1b" ? 0x800080 : 16711680,
-        footer: { text: `© YourNotifierNameHere` }, // 🔧 EDIT HERE
+        footer: { text: `© Xen Notifier ` }, // 🔧 EDIT HERE
         timestamp: new Date(list[0].timestamp * 1000).toISOString(),
         thumbnail: { url: getThumbnail(list) }
       };
@@ -199,7 +199,7 @@ setInterval(async ()=>{
         title: priorityH ? `🌟 ${priorityH.name} — ${priorityH.gen}` : `🌟 ${top.name} — ${top.gen}`,
         description: lines.join("\n"),
         color: 16766720,
-        footer: { text: "Your Highlight Footer Here" }, // 🔧 EDIT HERE
+        footer: { text: "Xen Notifier On Top" }, // 🔧 EDIT HERE
         timestamp: new Date(top.timestamp * 1000).toISOString(),
         thumbnail: { url: getThumbnail(unique) }
       };
