@@ -7,18 +7,12 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // ======== CONFIG ========
-// 🔧 EDIT HERE: Change your private key for AutoJoiner
 const AUTOJOINER_KEY = "your-autojoiner-key-here";
-
-// ⏲️ AutoJoiner buffer purge time in seconds
 const AUTOJOINER_BUFFER_CLEAN_SEC = 120;
-
-// 🔧 SERVER FETCH CONFIG - INCREASED
-const SERVER_FETCH_LIMIT = 100; // Increased from default
-const SERVER_FETCH_INTERVAL = 15000; // 15 seconds
+const SERVER_FETCH_LIMIT = 100;
+const SERVER_FETCH_INTERVAL = 15000;
 
 // ======== WEBHOOKS ========
-// 🔧 EDIT HERE: Replace "your-webhook-here" with your own Discord Webhooks
 const WEBHOOKS = {
   "10m": "https://discord.com/api/webhooks/1444053818278154271/02RKHZ_DafZmvmv6Cr35_llTfIENHXldvXHUdnMPSVP0KQ641SLxAdF3VqFS3bKkBGNp",
   "50m": "https://discord.com/api/webhooks/1444053774468517918/4tPh8KWNfNYOWdDj3CbU687XHtejURQlbOLPuKvUmXxTxhR13z-l6Tx1ESZyDnDA3rp5",
@@ -27,8 +21,6 @@ const WEBHOOKS = {
   "1b": "https://discord.com/api/webhooks/1444053589923332187/WXwz9yR_IhPtNbdDLgyHDt_M3q9GjSWdvaSicgKL1l8_U7lZ-j94AqfoNnnApqVwtH3H"
 };
 
-// ======== ROLE MENTIONS (OPTIONAL) ========
-// 🔧 EDIT HERE: Add your role IDs or leave blank ("") if you don't want mentions
 const ROLE_MENTIONS = {
   "10m": "<@1444362655426023736>",
   "50m": "<@1444362678276591656>",
@@ -37,18 +29,17 @@ const ROLE_MENTIONS = {
   "1b": "<@1444362692734353479>"
 };
 
-// ======== HIGHLIGHT WEBHOOK ========
-// 🔧 EDIT HERE: Put your highlight webhook or leave empty if not used
 const HIGHLIGHT_WEBHOOK = "https://discord.com/api/webhooks/1441848571983953951/bZWTcN8pbV06-T8dELQG9y2AVV8SPl6xhYzI4nH9iCkHhGBUREHjWQvao82j9GnvHRaZ";
 
 // ======== STATS WEBHOOK ========
-// 🔧 EDIT HERE: Put your stats webhook to show log counts & active bots
 const STATS_WEBHOOK = "https://discord.com/api/webhooks/1444735456167198815/PKzp4YDhYTicTeYa1z15__FaYgWXq9QQVe30Ot9ymfW7MpcVVRbMb5Bsgmpguxj4HEwA";
-const STATS_POST_INTERVAL = 60000; // Post stats every 60 seconds (60000ms)
-const BOT_TIMEOUT = 120000; // Bot considered inactive after 2 minutes (120000ms)
+const STATS_UPDATE_INTERVAL = 10000; // Update every 10 seconds
+const BOT_TIMEOUT = 120000; // 2 minutes
+
+// Store the stats message ID to edit it
+let statsMessageId = null;
 
 // ======== PRIORITY NAMES ======
-// 🔧 EDIT HERE: Customize or remove these names as you wish
 const PRIORITY_NAMES = [
   "La Taco Combinasion","La Secret Combinasion","Tang Tang Keletang",
   "Chipso and Queso","Garama and Madundung","La Casa Boo","Tictac Sahur",
@@ -60,22 +51,18 @@ const PRIORITY_NAMES = [
   "Fragrama and Chocrama","Celularcini Viciosini"
 ];
 
-// ======== THUMBNAILS ======
-// 🔧 EDIT HERE: Add/remove thumbnail URLs (recommended to keep as-is)
 const BRAINROT_THUMBNAILS = {
   "Strawberry Elephant": "your-thumbnail-url-here",
   "Meowl": "your-thumbnail-url-here",
   "Dragon Cannelloni": "your-thumbnail-url-here",
-  // ... (You can keep or remove the rest)
 };
 
-// ======== TIER COLORS ========
 const TIER_COLORS = {
-  "10m": 0x2b2d31,   // Dark gray
-  "50m": 0x2b2d31,   // Dark gray
-  "100m": 0x2b2d31,  // Dark gray
-  "300m": 0x2b2d31,  // Dark gray
-  "1b": 0x2b2d31     // Dark gray
+  "10m": 0x2b2d31,
+  "50m": 0x2b2d31,
+  "100m": 0x2b2d31,
+  "300m": 0x2b2d31,
+  "1b": 0x2b2d31
 };
 
 // ======== IN-MEMORY STRUCTURES ========
@@ -102,7 +89,7 @@ let activeBots = {}; // { botId: lastHeartbeat timestamp }
 setInterval(() => { sentMessages.clear(); console.log("🧹 Duplicate cache cleared"); }, 15*60*1000);
 setInterval(() => { autoJoinerServers = []; console.log(`🧹 autoJoinerServers cleared`); }, AUTOJOINER_BUFFER_CLEAN_SEC*1000);
 
-// ======== BOT CLEANUP - Remove inactive bots ========
+// ======== BOT CLEANUP ========
 setInterval(() => {
   const now = Date.now();
   for (const botId in activeBots) {
@@ -110,48 +97,72 @@ setInterval(() => {
       delete activeBots[botId];
     }
   }
-}, 30000); // Check every 30 seconds
+}, 30000);
 
-// ======== STATS EMBED POSTER ========
-setInterval(async () => {
-  if (!STATS_WEBHOOK || STATS_WEBHOOK === "your-stats-webhook-here") return;
+// ======== STATS EMBED - EDIT SINGLE MESSAGE ========
+async function updateStatsEmbed() {
+  if (!STATS_WEBHOOK) return;
 
   const now = new Date();
   const timeString = now.toLocaleTimeString("en-US", { hour: 'numeric', minute: '2-digit', hour12: true });
+  const dateString = now.toLocaleDateString("en-US", { month: 'short', day: 'numeric', year: 'numeric' });
 
   const activeBotsCount = Object.keys(activeBots).length;
 
+  // Clean embed design matching the image
   const statsEmbed = {
-    title: "Xen Notifier | Stats",
+    title: "📊 Xen Notifier | Stats",
     color: 0x2b2d31,
     fields: [
-      { name: "10M+", value: `🔵 ${logCounts["10m"].toLocaleString()}`, inline: true },
-      { name: "50M+", value: `🟢 ${logCounts["50m"].toLocaleString()}`, inline: true },
-      { name: "100M+", value: `🟡 ${logCounts["100m"].toLocaleString()}`, inline: true },
-      { name: "300M+", value: `🟠 ${logCounts["300m"].toLocaleString()}`, inline: true },
-      { name: "1B+", value: `🔴 ${logCounts["1b"].toLocaleString()}`, inline: true },
-      { name: "Total", value: `⚪ ${logCounts["total"].toLocaleString()}`, inline: true },
-      { name: "Active Bots", value: `🤖 ${activeBotsCount}`, inline: true }
+      { name: "10M+", value: `🔵 \`${logCounts["10m"].toLocaleString()}\``, inline: true },
+      { name: "50M+", value: `🟢 \`${logCounts["50m"].toLocaleString()}\``, inline: true },
+      { name: "100M+", value: `🟡 \`${logCounts["100m"].toLocaleString()}\``, inline: true },
+      { name: "300M+", value: `🟠 \`${logCounts["300m"].toLocaleString()}\``, inline: true },
+      { name: "1B+", value: `🔴 \`${logCounts["1b"].toLocaleString()}\``, inline: true },
+      { name: "Total", value: `⚪ \`${logCounts["total"].toLocaleString()}\``, inline: true },
+      { name: "Active Bots", value: `🤖 \`${activeBotsCount}\``, inline: true },
     ],
-    footer: { text: `Today at ${timeString}` },
-    timestamp: now.toISOString()
+    footer: { text: `Last updated: ${timeString} • ${dateString}` }
   };
 
   try {
-    await fetch(STATS_WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embeds: [statsEmbed] })
-    });
-    console.log(`📊 Stats posted: ${logCounts["total"]} total logs, ${activeBotsCount} active bots`);
+    if (statsMessageId) {
+      // Edit existing message
+      const webhookParts = STATS_WEBHOOK.split('/');
+      const webhookId = webhookParts[webhookParts.length - 2];
+      const webhookToken = webhookParts[webhookParts.length - 1];
+      
+      await fetch(`https://discord.com/api/webhooks/${webhookId}/${webhookToken}/messages/${statsMessageId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ embeds: [statsEmbed] })
+      });
+      console.log(`📊 Stats updated`);
+    } else {
+      // Create new message and store ID
+      const response = await fetch(`${STATS_WEBHOOK}?wait=true`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ embeds: [statsEmbed] })
+      });
+      const data = await response.json();
+      statsMessageId = data.id;
+      console.log(`📊 Stats message created: ${statsMessageId}`);
+    }
   } catch (err) {
-    console.error("❌ Stats post error:", err);
+    console.error("❌ Stats error:", err);
+    // Reset message ID if edit fails, will create new one
+    statsMessageId = null;
   }
-}, STATS_POST_INTERVAL);
+}
+
+// Update stats every 10 seconds
+setInterval(updateStatsEmbed, STATS_UPDATE_INTERVAL);
+
+// Initial stats post after 5 seconds
+setTimeout(updateStatsEmbed, 5000);
 
 // ======== HELPERS ========
-
-// Format large numbers to readable format (e.g., 2.8B/s, 180M/s)
 function formatMoney(value) {
   if (value >= 1_000_000_000) {
     return `$${(value / 1_000_000_000).toFixed(1)}B/s`;
@@ -163,7 +174,6 @@ function formatMoney(value) {
   return `$${value}/s`;
 }
 
-// Format money with commas for detailed view
 function formatMoneyDetailed(value) {
   return `$${value.toLocaleString()}/s`;
 }
@@ -207,7 +217,6 @@ function getThumbnail(brainrots){
   return BRAINROT_THUMBNAILS[withThumb[0].name];
 }
 
-// Get tier label for display
 function getTierLabel(tier) {
   const labels = {
     "10m": "10M+",
@@ -254,42 +263,35 @@ setInterval(async ()=>{
 
       list.sort((a,b)=>b.value-a.value);
 
-      // Get the top brainrot for the title
       const topBrainrot = list[0];
       const totalMoney = formatMoney(topBrainrot.value);
 
-      // Build embed fields in Notifier+ style
       const fields = [];
 
-      // Name field
       fields.push({
         name: "Name",
         value: topBrainrot.name,
         inline: true
       });
 
-      // Money/sec field
       fields.push({
         name: "Money/sec",
         value: totalMoney,
         inline: true
       });
 
-      // Players field
       fields.push({
         name: "Players",
         value: `${topBrainrot.players}/8`,
         inline: true
       });
 
-      // Job ID (Mobile) field
       fields.push({
         name: "Job ID (Mobile)",
         value: `\`${jobId}\``,
         inline: false
       });
 
-      // Join Script (PC) field
       const joinScript = `game:GetService("TeleportService"):TeleportToPlaceInstance(109983668079237,"${jobId}",game.Players.LocalPlayer)`;
       fields.push({
         name: "Join Script (PC)",
@@ -297,7 +299,6 @@ setInterval(async ()=>{
         inline: false
       });
 
-      // If there are multiple brainrots, add Others section
       if(list.length > 1) {
         const othersLines = list.slice(1).map(b => `1x ${b.name} : ${formatMoneyDetailed(b.value)}`);
         fields.push({
@@ -311,11 +312,10 @@ setInterval(async ()=>{
         title: `Xen Notifier | ${getTierLabel(tierKey)}`,
         color: TIER_COLORS[tierKey] || 0x2b2d31,
         fields: fields,
-        footer: { text: `Xen Notifier • ${new Date().toLocaleDateString()}` },
+        footer: { text: `Xen Notifier` },
         timestamp: new Date().toISOString()
       };
 
-      // Add thumbnail if available
       const thumb = getThumbnail(list);
       if(thumb) embed.thumbnail = { url: thumb };
 
@@ -325,7 +325,7 @@ setInterval(async ()=>{
       promises.push(sendEmbed(WEBHOOKS[targetTier||tierKey], ROLE_MENTIONS[targetTier||tierKey], embed, key));
     }
 
-    // ======== HIGHLIGHT EMBED (50M+) - Notifier+ Style ========
+    // ======== HIGHLIGHT EMBED ========
     const seen = new Set();
     const unique = [];
 
@@ -341,33 +341,28 @@ setInterval(async ()=>{
       unique.sort((a,b)=>b.value-a.value);
       const top = unique[0];
 
-      // Build highlight embed in Notifier+ style (no Job ID or Join Script)
       const totalHighlightMoney = formatMoney(top.value);
       
       const highlightFields = [];
 
-      // Name field
       highlightFields.push({
         name: "Name",
         value: top.name,
         inline: true
       });
 
-      // Money/sec field
       highlightFields.push({
         name: "Money/sec",
         value: totalHighlightMoney,
         inline: true
       });
 
-      // Players field
       highlightFields.push({
         name: "Players",
         value: `${top.players}/8`,
         inline: true
       });
 
-      // If there are multiple brainrots, add Others section
       if(unique.length > 1) {
         const othersLines = unique.slice(1).map(b => `1x ${b.name} : ${formatMoneyDetailed(b.value)}`);
         highlightFields.push({
@@ -379,13 +374,12 @@ setInterval(async ()=>{
 
       const highlightEmbed = {
         title: `Xen Notifier | Highlight`,
-        color: 0xFFD700, // Gold color for highlights
+        color: 0xFFD700,
         fields: highlightFields,
-        footer: { text: `Xen Notifier • ${new Date().toLocaleDateString()}` },
+        footer: { text: `Xen Notifier` },
         timestamp: new Date().toISOString()
       };
 
-      // Add thumbnail if available
       const thumbH = getThumbnail(unique);
       if(thumbH) highlightEmbed.thumbnail = { url: thumbH };
 
@@ -412,7 +406,9 @@ app.post("/add-server",(req,res)=>{
     if(!jobId) return res.status(400).json({error:"missing jobId"});
 
     // Update bot heartbeat if botId provided
-    if(botId) activeBots[botId] = Date.now();
+    if(botId) {
+      activeBots[botId] = Date.now();
+    }
 
     if(!serverBuffers[jobId]) serverBuffers[jobId] = [];
 
@@ -470,7 +466,7 @@ app.post("/add-server",(req,res)=>{
       }
     }
 
-    console.log(`📩 Received ${jobId} | ${brainrots.length} brainrots | ${players} players`);
+    console.log(`📩 Received ${jobId} | ${brainrots.length} brainrots | ${players} players | bot: ${botId || 'none'}`);
     return res.sendStatus(200);
 
   } catch(err){
@@ -505,6 +501,7 @@ app.get("/status",(req,res)=>res.json({
   sentMessagesCacheSize:sentMessages.size,
   autoJoinerBuffered:autoJoinerServers.length,
   activeBots: Object.keys(activeBots).length,
+  botList: Object.keys(activeBots),
   logCounts: logCounts
 }));
 
@@ -527,7 +524,7 @@ app.get("/stats", (req, res) => {
   });
 });
 
-// Reset stats (optional - call this to reset counters)
+// Reset stats
 app.post("/reset-stats", (req, res) => {
   logCounts = { "10m": 0, "50m": 0, "100m": 0, "300m": 0, "1b": 0, "total": 0 };
   console.log("📊 Stats reset");
