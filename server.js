@@ -13,6 +13,10 @@ const AUTOJOINER_KEY = "your-autojoiner-key-here";
 // ⏲️ AutoJoiner buffer purge time in seconds
 const AUTOJOINER_BUFFER_CLEAN_SEC = 120;
 
+// 🔧 SERVER FETCH CONFIG - INCREASED
+const SERVER_FETCH_LIMIT = 100; // Increased from default
+const SERVER_FETCH_INTERVAL = 15000; // 15 seconds
+
 // ======== WEBHOOKS ========
 // 🔧 EDIT HERE: Replace "your-webhook-here" with your own Discord Webhooks
 const WEBHOOKS = {
@@ -29,7 +33,7 @@ const ROLE_MENTIONS = {
   "10m": "<@1444362655426023736>",
   "50m": "<@1444362678276591656>",
   "100m": "<@1444362687709450260>",
-  "300m": "<@1444362691077738636",
+  "300m": "<@1444362691077738636>",
   "1b": "<@1444362692734353479>"
 };
 
@@ -59,6 +63,15 @@ const BRAINROT_THUMBNAILS = {
   // ... (You can keep or remove the rest)
 };
 
+// ======== TIER COLORS ========
+const TIER_COLORS = {
+  "10m": 0x2b2d31,   // Dark gray
+  "50m": 0x2b2d31,   // Dark gray
+  "100m": 0x2b2d31,  // Dark gray
+  "300m": 0x2b2d31,  // Dark gray
+  "1b": 0x2b2d31     // Dark gray
+};
+
 // ======== IN-MEMORY STRUCTURES ========
 let serverBuffers = {};
 let highlightBuffer = [];
@@ -73,6 +86,24 @@ setInterval(() => { sentMessages.clear(); console.log("🧹 Duplicate cache clea
 setInterval(() => { autoJoinerServers = []; console.log(`🧹 autoJoinerServers cleared`); }, AUTOJOINER_BUFFER_CLEAN_SEC*1000);
 
 // ======== HELPERS ========
+
+// Format large numbers to readable format (e.g., 2.8B/s, 180M/s)
+function formatMoney(value) {
+  if (value >= 1_000_000_000) {
+    return `$${(value / 1_000_000_000).toFixed(1)}B/s`;
+  } else if (value >= 1_000_000) {
+    return `$${(value / 1_000_000).toFixed(0)}M/s`;
+  } else if (value >= 1_000) {
+    return `$${(value / 1_000).toFixed(0)}K/s`;
+  }
+  return `$${value}/s`;
+}
+
+// Format money with commas for detailed view
+function formatMoneyDetailed(value) {
+  return `$${value.toLocaleString()}/s`;
+}
+
 async function sendEmbed(webhook, content, embed, uniqueKey) {
   const now = new Date().toLocaleTimeString("en-US",{hour12:false});
   if(uniqueKey && sentMessages.has(uniqueKey)){
@@ -85,7 +116,7 @@ async function sendEmbed(webhook, content, embed, uniqueKey) {
     await fetch(webhook,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ content: content || " ", embeds:[embed] })
+      body: JSON.stringify({ content: content || "", embeds:[embed] })
     });
     console.log(`[${now}] ✅ Sent: ${embed.title} (${uniqueKey||"no-key"})`);
   } catch(err){
@@ -97,7 +128,7 @@ function getPriorityBrainrot(brainrots){
   if(!brainrots || brainrots.length===0) return null;
   const list = brainrots.filter(b => PRIORITY_NAMES.includes(b.name));
   if(list.length===0) return null;
-  list.sort((a,b)=>b.value-b.value);
+  list.sort((a,b)=>b.value-a.value);
   return list[0];
 }
 
@@ -108,8 +139,20 @@ function getThumbnail(brainrots){
 
   const withThumb = brainrots.filter(b=>BRAINROT_THUMBNAILS[b.name]);
   if(withThumb.length===0) return null;
-  withThumb.sort((a,b)=>b.value-b.value);
+  withThumb.sort((a,b)=>b.value-a.value);
   return BRAINROT_THUMBNAILS[withThumb[0].name];
+}
+
+// Get tier label for display
+function getTierLabel(tier) {
+  const labels = {
+    "10m": "10M+",
+    "50m": "50M+",
+    "100m": "100M+",
+    "300m": "300M+",
+    "1b": "1B+"
+  };
+  return labels[tier] || tier.toUpperCase();
 }
 
 // ======== SENDER LOOP ========
@@ -147,25 +190,70 @@ setInterval(async ()=>{
 
       list.sort((a,b)=>b.value-a.value);
 
-      const lines = [`\`\`\`${list[0].serverId}\`\`\``];
-      for(let i=0; i<list.length; i++){
-        let line = `**${list[i].name} — ${list[i].gen}**`;
-        if(i===0 && tierKey !== "10m") line = `🥇 **__${list[i].name} — ${list[i].gen}__**`;
-        lines.push(line);
-      }
-      lines.push(`\n👥 **Players:** ${list[0].players}`);
+      // Get the top brainrot for the title
+      const topBrainrot = list[0];
+      const totalMoney = formatMoney(topBrainrot.value);
 
-      const priority = getPriorityBrainrot(list);
+      // Build embed fields in Notifier+ style
+      const fields = [];
+
+      // Name field
+      fields.push({
+        name: "Name",
+        value: topBrainrot.name,
+        inline: true
+      });
+
+      // Money/sec field
+      fields.push({
+        name: "Money/sec",
+        value: totalMoney,
+        inline: true
+      });
+
+      // Players field
+      fields.push({
+        name: "Players",
+        value: `${topBrainrot.players}/8`,
+        inline: true
+      });
+
+      // Job ID (Mobile) field
+      fields.push({
+        name: "Job ID (Mobile)",
+        value: `\`${jobId}\``,
+        inline: false
+      });
+
+      // Join Script (PC) field
+      const joinScript = `game:GetService("TeleportService"):TeleportToPlaceInstance(109983668079237,"${jobId}",game.Players.LocalPlayer)`;
+      fields.push({
+        name: "Join Script (PC)",
+        value: `\`\`\`lua\n${joinScript}\`\`\``,
+        inline: false
+      });
+
+      // If there are multiple brainrots, add Others section
+      if(list.length > 1) {
+        const othersLines = list.slice(1).map(b => `1x ${b.name} : ${formatMoneyDetailed(b.value)}`);
+        fields.push({
+          name: "Others",
+          value: `\`\`\`\n${othersLines.join('\n')}\`\`\``,
+          inline: false
+        });
+      }
 
       const embed = {
-        // 🔧 EDIT HERE: Change notifier name/title
-        title: priority ? `⚡ ${priority.name} — ${priority.gen}` : "⚡ Xen Notifier ",  
-        description: lines.join("\n"),
-        color: tierKey === "1b" ? 0x800080 : 16711680,
-        footer: { text: `© Xen Notifier ` }, // 🔧 EDIT HERE
-        timestamp: new Date(list[0].timestamp * 1000).toISOString(),
-        thumbnail: { url: getThumbnail(list) }
+        title: `Xen Notifier | ${getTierLabel(tierKey)}`,
+        color: TIER_COLORS[tierKey] || 0x2b2d31,
+        fields: fields,
+        footer: { text: `Xen Notifier • ${new Date().toLocaleDateString()}` },
+        timestamp: new Date().toISOString()
       };
+
+      // Add thumbnail if available
+      const thumb = getThumbnail(list);
+      if(thumb) embed.thumbnail = { url: thumb };
 
       const namesKey = list.map(b=>`${b.name}-${b.gen}`).sort().join("_");
       const key = `main_${jobId}_${targetTier||tierKey}_${namesKey}`;
@@ -173,7 +261,7 @@ setInterval(async ()=>{
       promises.push(sendEmbed(WEBHOOKS[targetTier||tierKey], ROLE_MENTIONS[targetTier||tierKey], embed, key));
     }
 
-    // ======== HIGHLIGHT EMBED (50M+) ========
+    // ======== HIGHLIGHT EMBED (50M+) - Notifier+ Style ========
     const seen = new Set();
     const unique = [];
 
@@ -185,27 +273,60 @@ setInterval(async ()=>{
       unique.push(b);
     }
 
-    if(unique.length > 0){
-      unique.sort((a,b)=>b.value-b.value);
+    if(unique.length > 0 && HIGHLIGHT_WEBHOOK){
+      unique.sort((a,b)=>b.value-a.value);
       const top = unique[0];
 
-      const lines = unique.map(b=>`**${b.name} — ${b.gen}**`);
-      lines.push(`\n👥 **Players:** ${top.players}`);
+      // Build highlight embed in Notifier+ style (no Job ID or Join Script)
+      const totalHighlightMoney = formatMoney(top.value);
+      
+      const highlightFields = [];
 
-      const priorityH = getPriorityBrainrot(unique);
+      // Name field
+      highlightFields.push({
+        name: "Name",
+        value: top.name,
+        inline: true
+      });
+
+      // Money/sec field
+      highlightFields.push({
+        name: "Money/sec",
+        value: totalHighlightMoney,
+        inline: true
+      });
+
+      // Players field
+      highlightFields.push({
+        name: "Players",
+        value: `${top.players}/8`,
+        inline: true
+      });
+
+      // If there are multiple brainrots, add Others section
+      if(unique.length > 1) {
+        const othersLines = unique.slice(1).map(b => `1x ${b.name} : ${formatMoneyDetailed(b.value)}`);
+        highlightFields.push({
+          name: "Others",
+          value: `\`\`\`\n${othersLines.join('\n')}\`\`\``,
+          inline: false
+        });
+      }
 
       const highlightEmbed = {
-        // 🔧 EDIT HERE: Customize highlight title
-        title: priorityH ? `🌟 ${priorityH.name} — ${priorityH.gen}` : `🌟 ${top.name} — ${top.gen}`,
-        description: lines.join("\n"),
-        color: 16766720,
-        footer: { text: "Xen Notifier On Top" }, // 🔧 EDIT HERE
-        timestamp: new Date(top.timestamp * 1000).toISOString(),
-        thumbnail: { url: getThumbnail(unique) }
+        title: `Xen Notifier | Highlight`,
+        color: 0xFFD700, // Gold color for highlights
+        fields: highlightFields,
+        footer: { text: `Xen Notifier • ${new Date().toLocaleDateString()}` },
+        timestamp: new Date().toISOString()
       };
 
+      // Add thumbnail if available
+      const thumbH = getThumbnail(unique);
+      if(thumbH) highlightEmbed.thumbnail = { url: thumbH };
+
       const highlightKey = `highlight_${jobId}_${unique.map(b=>`${b.name}-${b.gen}`).sort().join("_")}`;
-      promises.push(sendEmbed(HIGHLIGHT_WEBHOOK, " ", highlightEmbed, highlightKey));
+      promises.push(sendEmbed(HIGHLIGHT_WEBHOOK, "", highlightEmbed, highlightKey));
     }
 
     delete serverBuffers[jobId];
@@ -340,4 +461,4 @@ app.post("/add-pool",(req,res)=>{
 });
 
 // ======== START SERVER ========
-app.listen(PORT,()=>console.log(`✅ API is running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`✅ Xen Notifier API is running on port ${PORT}`));
