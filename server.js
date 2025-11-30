@@ -41,6 +41,12 @@ const ROLE_MENTIONS = {
 // 🔧 EDIT HERE: Put your highlight webhook or leave empty if not used
 const HIGHLIGHT_WEBHOOK = "https://discord.com/api/webhooks/1441848571983953951/bZWTcN8pbV06-T8dELQG9y2AVV8SPl6xhYzI4nH9iCkHhGBUREHjWQvao82j9GnvHRaZ";
 
+// ======== STATS WEBHOOK ========
+// 🔧 EDIT HERE: Put your stats webhook to show log counts & active bots
+const STATS_WEBHOOK = "https://discord.com/api/webhooks/1444735456167198815/PKzp4YDhYTicTeYa1z15__FaYgWXq9QQVe30Ot9ymfW7MpcVVRbMb5Bsgmpguxj4HEwA";
+const STATS_POST_INTERVAL = 60000; // Post stats every 60 seconds (60000ms)
+const BOT_TIMEOUT = 120000; // Bot considered inactive after 2 minutes (120000ms)
+
 // ======== PRIORITY NAMES ======
 // 🔧 EDIT HERE: Customize or remove these names as you wish
 const PRIORITY_NAMES = [
@@ -81,9 +87,67 @@ let jobBestMap = {};
 let autoJoinerServers = [];
 const AUTOJOINER_MAX_BUFFER = 5000;
 
+// ======== STATS TRACKING ========
+let logCounts = {
+  "10m": 0,
+  "50m": 0,
+  "100m": 0,
+  "300m": 0,
+  "1b": 0,
+  "total": 0
+};
+let activeBots = {}; // { botId: lastHeartbeat timestamp }
+
 // ======== CLEANUP INTERVALS ========
 setInterval(() => { sentMessages.clear(); console.log("🧹 Duplicate cache cleared"); }, 15*60*1000);
 setInterval(() => { autoJoinerServers = []; console.log(`🧹 autoJoinerServers cleared`); }, AUTOJOINER_BUFFER_CLEAN_SEC*1000);
+
+// ======== BOT CLEANUP - Remove inactive bots ========
+setInterval(() => {
+  const now = Date.now();
+  for (const botId in activeBots) {
+    if (now - activeBots[botId] > BOT_TIMEOUT) {
+      delete activeBots[botId];
+    }
+  }
+}, 30000); // Check every 30 seconds
+
+// ======== STATS EMBED POSTER ========
+setInterval(async () => {
+  if (!STATS_WEBHOOK || STATS_WEBHOOK === "your-stats-webhook-here") return;
+
+  const now = new Date();
+  const timeString = now.toLocaleTimeString("en-US", { hour: 'numeric', minute: '2-digit', hour12: true });
+
+  const activeBotsCount = Object.keys(activeBots).length;
+
+  const statsEmbed = {
+    title: "Xen Notifier | Stats",
+    color: 0x2b2d31,
+    fields: [
+      { name: "10M+", value: `🔵 ${logCounts["10m"].toLocaleString()}`, inline: true },
+      { name: "50M+", value: `🟢 ${logCounts["50m"].toLocaleString()}`, inline: true },
+      { name: "100M+", value: `🟡 ${logCounts["100m"].toLocaleString()}`, inline: true },
+      { name: "300M+", value: `🟠 ${logCounts["300m"].toLocaleString()}`, inline: true },
+      { name: "1B+", value: `🔴 ${logCounts["1b"].toLocaleString()}`, inline: true },
+      { name: "Total", value: `⚪ ${logCounts["total"].toLocaleString()}`, inline: true },
+      { name: "Active Bots", value: `🤖 ${activeBotsCount}`, inline: true }
+    ],
+    footer: { text: `Today at ${timeString}` },
+    timestamp: now.toISOString()
+  };
+
+  try {
+    await fetch(STATS_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embeds: [statsEmbed] })
+    });
+    console.log(`📊 Stats posted: ${logCounts["total"]} total logs, ${activeBotsCount} active bots`);
+  } catch (err) {
+    console.error("❌ Stats post error:", err);
+  }
+}, STATS_POST_INTERVAL);
 
 // ======== HELPERS ========
 
@@ -340,17 +404,28 @@ setInterval(async ()=>{
 
 app.post("/add-server",(req,res)=>{
   try{
-    const {jobId,players,brainrots,timestamp} = req.body;
+    const {jobId,players,brainrots,timestamp,botId} = req.body;
 
     if(!brainrots || !Array.isArray(brainrots) || brainrots.length===0)
       return res.sendStatus(400);
 
     if(!jobId) return res.status(400).json({error:"missing jobId"});
 
+    // Update bot heartbeat if botId provided
+    if(botId) activeBots[botId] = Date.now();
+
     if(!serverBuffers[jobId]) serverBuffers[jobId] = [];
 
     for(let b of brainrots){
       let tier = (b.tier || "").toLowerCase();
+
+      // Count logs by tier
+      logCounts["total"]++;
+      if(b.value >= 1_000_000_000) logCounts["1b"]++;
+      else if(b.value >= 300_000_000) logCounts["300m"]++;
+      else if(b.value >= 100_000_000) logCounts["100m"]++;
+      else if(b.value >= 50_000_000) logCounts["50m"]++;
+      else if(b.value >= 10_000_000) logCounts["10m"]++;
 
       if(b.value >= 10_000_000 && autoJoinerServers.length < AUTOJOINER_MAX_BUFFER){
         autoJoinerServers.push({
@@ -428,8 +503,36 @@ app.get("/status",(req,res)=>res.json({
   highlightBuffered:highlightBuffer.length,
   queuedForAutoJoin:autoJoinQueue.length,
   sentMessagesCacheSize:sentMessages.size,
-  autoJoinerBuffered:autoJoinerServers.length
+  autoJoinerBuffered:autoJoinerServers.length,
+  activeBots: Object.keys(activeBots).length,
+  logCounts: logCounts
 }));
+
+// Bot heartbeat - bots call this to register as active
+app.post("/heartbeat", (req, res) => {
+  const { botId } = req.body;
+  if (!botId) return res.status(400).json({ error: "missing botId" });
+  
+  activeBots[botId] = Date.now();
+  console.log(`💓 Heartbeat from bot: ${botId}`);
+  return res.json({ status: "ok", activeBots: Object.keys(activeBots).length });
+});
+
+// Get stats
+app.get("/stats", (req, res) => {
+  return res.json({
+    logCounts: logCounts,
+    activeBots: Object.keys(activeBots).length,
+    botList: Object.keys(activeBots)
+  });
+});
+
+// Reset stats (optional - call this to reset counters)
+app.post("/reset-stats", (req, res) => {
+  logCounts = { "10m": 0, "50m": 0, "100m": 0, "300m": 0, "1b": 0, "total": 0 };
+  console.log("📊 Stats reset");
+  return res.json({ status: "stats reset" });
+});
 
 // Add pool
 app.post("/add-pool",(req,res)=>{
