@@ -10,21 +10,21 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// ======== WEBHOOKS (UPDATE THESE) ========
 const WEBHOOKS = {
-  "10m": "https://discord.com/api/webhooks/YOUR_10M_WEBHOOK",
-  "50m": "https://discord.com/api/webhooks/YOUR_50M_WEBHOOK",
-  "100m": "https://discord.com/api/webhooks/YOUR_100M_WEBHOOK",
-  "300m": "https://discord.com/api/webhooks/YOUR_300M_WEBHOOK",
-  "1b": "https://discord.com/api/webhooks/YOUR_1B_WEBHOOK"
+  "10m": "https://discord.com/api/webhooks/1444053818278154271/02RKHZ_DafZmvmv6Cr35_llTfIENHXldvXHUdnMPSVP0KQ641SLxAdF3VqFS3bKkBGNp",
+  "50m": "https://discord.com/api/webhooks/1444053774468517918/4tPh8KWNfNYOWdDj3CbU687XHtejURQlbOLPuKvUmXxTxhR13z-l6Tx1ESZyDnDA3rp5",
+  "100m": "https://discord.com/api/webhooks/1444053732538187808/jAcpkX4Rg6b20bOGaPxmxcRhVCZV-k6Qe65gMpOSK5fHH7HRn5ioqqv4e7AKV-c9yDQc",
+  "300m": "https://discord.com/api/webhooks/1444053636543025164/naCk7TbNCtUDJRoV606gJYUBuFwlwThLlSVivfOIdYEyjayY2FEPlxnzNKMm7f_7Eyx1",
+  "1b": "https://discord.com/api/webhooks/1444053589923332187/WXwz9yR_IhPtNbdDLgyHDt_M3q9GjSWdvaSicgKL1l8_U7lZ-j94AqfoNnnApqVwtH3H"
 };
 
+const STATS_WEBHOOK = "https://discord.com/api/webhooks/1444735456167198815/PKzp4YDhYTicTeYa1z15__FaYgWXq9QQVe30Ot9ymfW7MpcVVRbMb5Bsgmpguxj4HEwA";
 const ROLE_MENTIONS = {
-  "10m": "<@&YOUR_10M_ROLE>",
-  "50m": "<@&YOUR_50M_ROLE>",
-  "100m": "<@&YOUR_100M_ROLE>",
-  "300m": "<@&YOUR_300M_ROLE>",
-  "1b": "<@&YOUR_1B_ROLE>"
+  "10m": "<@&1441594200767336590",
+  "50m": "<@1441594200767336590",
+  "100m": "<@&1441594200767336590",
+  "300m": "<@&1441594200767336590>",
+  "1b": "<@&1441594200767336590>"
 };
 
 const STATS_WEBHOOK = "https://discord.com/api/webhooks/YOUR_STATS_WEBHOOK";
