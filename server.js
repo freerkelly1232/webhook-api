@@ -99,6 +99,29 @@ setInterval(() => {
   }
 }, 30000);
 
+// ======== HEARTBEAT ENDPOINT ========
+app.post("/heartbeat", (req, res) => {
+  try {
+    const { botId } = req.body;
+    if (!botId) return res.status(400).json({ error: "missing botId" });
+    
+    activeBots[botId] = Date.now();
+    return res.json({ success: true, activeBots: Object.keys(activeBots).length });
+  } catch (err) {
+    console.error("heartbeat error:", err);
+    return res.sendStatus(500);
+  }
+});
+
+app.get("/active-bots", (req, res) => {
+  const count = Object.keys(activeBots).length;
+  const botList = Object.keys(activeBots).map(id => ({
+    id,
+    lastSeen: Math.floor((Date.now() - activeBots[id]) / 1000) + "s ago"
+  }));
+  return res.json({ count, bots: botList });
+});
+
 // ======== STATS EMBED - EDIT SINGLE MESSAGE ========
 async function updateStatsEmbed() {
   if (!STATS_WEBHOOK) return;
@@ -492,6 +515,37 @@ app.get("/get-servers",(req,res)=>res.json({
     players:e.players
   }))
 }));
+
+// Remove server from autojoiner list (when someone joins)
+app.post("/remove-server",(req,res)=>{
+  try {
+    const { jobId } = req.body;
+    if(!jobId) return res.status(400).json({error:"missing jobId"});
+    
+    // Remove from autoJoinerServers
+    const beforeCount = autoJoinerServers.length;
+    autoJoinerServers = autoJoinerServers.filter(s => s.jobId !== jobId);
+    const removedFromList = beforeCount - autoJoinerServers.length;
+    
+    // Remove from autoJoinQueue
+    const beforeQueue = autoJoinQueue.length;
+    autoJoinQueue = autoJoinQueue.filter(s => s.jobId !== jobId);
+    const removedFromQueue = beforeQueue - autoJoinQueue.length;
+    
+    // Remove from jobBestMap
+    if(jobBestMap[jobId]) delete jobBestMap[jobId];
+    
+    console.log(`🗑️ Removed server ${jobId.substring(0,8)}... | List: -${removedFromList} | Queue: -${removedFromQueue}`);
+    
+    return res.json({ 
+      success: true, 
+      removed: removedFromList + removedFromQueue 
+    });
+  } catch(err) {
+    console.error("remove-server error:", err);
+    return res.sendStatus(500);
+  }
+});
 
 // Status page
 app.get("/status",(req,res)=>res.json({
