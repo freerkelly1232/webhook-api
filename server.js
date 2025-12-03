@@ -201,33 +201,74 @@ setInterval(() => {
     const filtered = buffer.filter(b => b.value >= 10_000_000);
     if (!filtered.length) continue;
     
-    const lines = [`\`\`\`${jobId}\`\`\``];
+    const topItem = filtered[0];
     
-    for (let i = 0; i < Math.min(filtered.length, 10); i++) {
-      const b = filtered[i];
-      const line = i === 0 && targetTier !== "10m"
-        ? `🥇 **__${b.name} — ${b.gen}__**`
-        : `**${b.name} — ${b.gen}**`;
-      lines.push(line);
-    }
+    // Format money value
+    const formatMoney = (val) => {
+      if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(1)}B/s`;
+      if (val >= 1_000_000) return `$${Math.round(val / 1_000_000)}M/s`;
+      return `$${Math.round(val / 1000)}K/s`;
+    };
     
-    if (filtered.length > 10) {
-      lines.push(`*...and ${filtered.length - 10} more*`);
-    }
+    // Build "Others" list (exclude the top item)
+    const others = filtered
+      .filter(b => b.name !== topItem.name || b.gen !== topItem.gen)
+      .slice(0, 5)
+      .map(b => `${b.name}: ${formatMoney(b.value)}`)
+      .join('\n');
     
-    lines.push(`\n👥 **Players:** ${buffer[0].players}`);
+    // Determine tier label for title
+    let tierLabel = "10M+";
+    if (topValue >= 1_000_000_000) tierLabel = "1B+";
+    else if (topValue >= 300_000_000) tierLabel = "300M+";
+    else if (topValue >= 100_000_000) tierLabel = "100M+";
+    else if (topValue >= 50_000_000) tierLabel = "50M+";
     
-    const priority = getPriorityBrainrot(filtered);
+    // Get the bot that detected this
+    const detectedBy = topItem.botId || "Unknown";
     
     const embed = {
-      title: priority 
-        ? `⚡ ${priority.name} — ${priority.gen}`
-        : `⚡ High Value Server`,
-      description: lines.join("\n"),
+      title: `Xen Notifier | ${tierLabel}`,
       color: getEmbedColor(targetTier),
-      footer: { text: "© YourNotifierName" },
+      fields: [
+        {
+          name: "Name",
+          value: topItem.name,
+          inline: true
+        },
+        {
+          name: "Money/sec",
+          value: formatMoney(topItem.value),
+          inline: true
+        },
+        {
+          name: "Players",
+          value: `${buffer[0].players}/8`,
+          inline: true
+        },
+        {
+          name: "Job ID",
+          value: jobId,
+          inline: false
+        },
+        {
+          name: "Join Script",
+          value: `\`\`\`lua\ngame:GetService("TeleportService"):TeleportToPlaceInstance(109983668079237,"${jobId}",game.Players.LocalPlayer)\`\`\``,
+          inline: false
+        }
+      ],
+      footer: { text: `Bot ${detectedBy} scanning • Xen Notifier` },
       timestamp: new Date().toISOString()
     };
+    
+    // Add "Others" field if there are more brainrots
+    if (others) {
+      embed.fields.push({
+        name: "Others",
+        value: `\`\`\`\n${others}\`\`\``,
+        inline: false
+      });
+    }
     
     const namesKey = filtered.map(b => `${b.name}-${b.gen}`).sort().join("_").slice(0, 100);
     const key = `main_${jobId}_${targetTier}_${namesKey}`;
@@ -241,17 +282,11 @@ setInterval(() => {
     const shouldHighlight = topValue >= 100_000_000 || hasHighlightPriority;
     
     if (HIGHLIGHT_WEBHOOK && shouldHighlight) {
-      // Find the highlight priority brainrot if any
-      const highlightPriorityItem = filtered.find(b => HIGHLIGHT_PRIORITY_NAMES.has(b.name));
-      
+      // For highlights, just reuse the embed but change color for priority
       const highlightEmbed = {
         ...embed,
-        title: highlightPriorityItem 
-          ? `🌟 ${highlightPriorityItem.name} — ${highlightPriorityItem.gen}`
-          : priority 
-            ? `🌟 ${priority.name} — ${priority.gen}`
-            : `🌟 ${filtered[0].name} — ${filtered[0].gen}`,
-        color: hasHighlightPriority ? 0xFF00FF : 0xFFD700  // Magenta for priority, Gold for 100m+
+        title: hasHighlightPriority ? `Xen Notifier | Priority` : embed.title,
+        color: hasHighlightPriority ? 0xFF00FF : embed.color  // Magenta for priority
       };
       queueWebhook(HIGHLIGHT_WEBHOOK, "", highlightEmbed, `highlight_${key}`);
     }
@@ -270,7 +305,7 @@ setInterval(() => {
 // ======== ENDPOINTS ========
 app.post("/add-server", (req, res) => {
   try {
-    const { jobId, players, brainrots, timestamp } = req.body;
+    const { jobId, players, brainrots, timestamp, botId } = req.body;
     
     if (!jobId || !brainrots?.length) {
       return res.status(400).json({ error: "Missing jobId or brainrots" });
@@ -293,7 +328,8 @@ app.post("/add-server", (req, res) => {
         gen: b.gen,
         value: value,
         players: players || 0,
-        timestamp: timestamp || Math.floor(Date.now() / 1000)
+        timestamp: timestamp || Math.floor(Date.now() / 1000),
+        botId: botId || b.botId || "Unknown"
       });
       
       // Add to autojoiner if valuable
