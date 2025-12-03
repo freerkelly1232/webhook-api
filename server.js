@@ -52,7 +52,7 @@ const PRIORITY_NAMES = new Set([
   "Ketupat Kepat","Capitano Moby","Headless Horseman","Money Money Puggy",
   "Spaghetti Tualetti","Nuclearo Dinossauro","Tralaledon","Los Hotspotsitos",
   "Chillin Chili","Los Primos","Los Tacoritas","Los Spaghettis",
-  "Fragrama and Chocrama","Celularcini Viciosini"
+  "Fragrama and Chocrama","Celularcini Viciosini","Gobblino Uniciclino"
 ]);
 
 // ======== HIGHLIGHT PRIORITY NAMES (always show in highlights) ========
@@ -64,7 +64,7 @@ const HIGHLIGHT_PRIORITY_NAMES = new Set([
   "Ketupat Kepat","Capitano Moby","Headless Horseman","Money Money Puggy",
   "Spaghetti Tualetti","Nuclearo Dinossauro","Tralaledon","Los Hotspotsitos",
   "Chillin Chili","Los Primos","Los Tacoritas","Los Spaghettis",
-  "Fragrama and Chocrama","Celularcini Viciosini"
+  "Fragrama and Chocrama","Celularcini Viciosini","Gobblino Uniciclino"
 ]);
 
 // ======== LRU CACHE FOR DEDUPLICATION ========
@@ -455,6 +455,11 @@ app.post("/add-server", (req, res) => {
   try {
     const { jobId, players, brainrots, timestamp, botId } = req.body;
     
+    // Track this bot as active (even if no brainrots)
+    if (botId) {
+      trackBot(botId);
+    }
+    
     if (!jobId || !brainrots?.length) {
       return res.status(400).json({ error: "Missing jobId or brainrots" });
     }
@@ -587,6 +592,28 @@ app.post("/add-pool", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: Date.now() });
+});
+
+// Heartbeat endpoint - bots call this to register as active
+app.post("/heartbeat", (req, res) => {
+  const { botId } = req.body;
+  if (botId) {
+    trackBot(botId);
+    res.json({ tracked: true, activeBots: getActiveBotCount() });
+  } else {
+    res.status(400).json({ error: "Missing botId" });
+  }
+});
+
+// Also support GET for simpler heartbeat
+app.get("/heartbeat/:botId", (req, res) => {
+  const botId = req.params.botId;
+  if (botId) {
+    trackBot(botId);
+    res.json({ tracked: true, activeBots: getActiveBotCount() });
+  } else {
+    res.status(400).json({ error: "Missing botId" });
+  }
 });
 
 // ======== START ========
