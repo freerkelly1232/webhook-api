@@ -1,38 +1,46 @@
-// ============================================
-// COVERAGE WEBHOOK API v2.0
-// Clean, fast, no sharing
-// ============================================
+// server.js - OPTIMIZED Discord Notifier
+// Features:
+// - Batched webhook sending (avoids rate limits)
+// - Efficient deduplication with LRU cache
+// - Priority queue for best servers
+// - Memory-efficient buffer management
 
 const express = require("express");
 const fetch = require("node-fetch");
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
 
+// ======== CONFIG ========
+const AUTOJOINER_KEY = process.env.AUTOJOINER_KEY || "your-autojoiner-key-here";
+const AUTOJOINER_BUFFER_CLEAN_SEC = 120;
+const MAX_BUFFER_SIZE = 5000;
+const WEBHOOK_BATCH_DELAY_MS = 600;  // Delay between webhook sends
+const DEDUP_CACHE_SIZE = 10000;       // LRU cache size
+const DEDUP_CACHE_TTL_MS = 900000;    // 15 minutes
+
 // ======== WEBHOOKS ========
 const WEBHOOKS = {
-  "10m": "https://discord.com/api/webhooks/1444053818278154271/02RKHZ_DafZmvmv6Cr35_llTfIENHXldvXHUdnMPSVP0KQ641SLxAdF3VqFS3bKkBGNp",
-  "50m": "https://discord.com/api/webhooks/1444053774468517918/4tPh8KWNfNYOWdDj3CbU687XHtejURQlbOLPuKvUmXxTxhR13z-l6Tx1ESZyDnDA3rp5",
-  "100m": "https://discord.com/api/webhooks/1444053732538187808/jAcpkX4Rg6b20bOGaPxmxcRhVCZV-k6Qe65gMpOSK5fHH7HRn5ioqqv4e7AKV-c9yDQc",
-  "300m": "https://discord.com/api/webhooks/1444053636543025164/naCk7TbNCtUDJRoV606gJYUBuFwlwThLlSVivfOIdYEyjayY2FEPlxnzNKMm7f_7Eyx1",
-  "1b": "https://discord.com/api/webhooks/1444053589923332187/WXwz9yR_IhPtNbdDLgyHDt_M3q9GjSWdvaSicgKL1l8_U7lZ-j94AqfoNnnApqVwtH3H"
+  "10m": "https://discord.com/api/webhooks/1445565930104029205/k897On-Kq-djxkDsbYCL5YjXrSwaupxOzYEEFV6rMOL0CgzW-4VNa_zzSbqPFkLzfZmw",
+  "50m": "https://discord.com/api/webhooks/1445565737640136875/4OCEo_3LuuQf7JrqWSvNSEnHfjZ1PpisEV-v1M6qPifwxnCEAF5b84zbI5rlEZMVCdRB",
+  "100m": "https://discord.com/api/webhooks/1445565737640136875/4OCEo_3LuuQf7JrqWSvNSEnHfjZ1PpisEV-v1M6qPifwxnCEAF5b84zbI5rlEZMVCdRB",
+  "300m": "https://discord.com/api/webhooks/1445565671953010906/mfQb-npQF4az9t-Zb7CqHULcEUqvIvXSskQp7JYy4mKdFl3xicQkTgUJd5nnZ4w1uI9P",
+  "1b": "https://discord.com/api/webhooks/1445565590508142733/Q9bBllVQZKREkpH9_t4YEwVrOgXwOzftXRDnwRXyIvWDyCX4GDedfmyU7nvmss1dN0lB"
 };
 
 const ROLE_MENTIONS = {
-  "10m": "<@1444362655426023736>",
-  "50m": "<@1444362678276591656>",
-  "100m": "<@1444362687709450260>",
-  "300m": "<@1444362691077738636>",
-  "1b": "<@1444362692734353479>"
+  "10m": process.env.ROLE_10M || "",
+  "50m": process.env.ROLE_50M || "",
+  "100m": process.env.ROLE_100M || "",
+  "300m": process.env.ROLE_300M || "",
+  "1b": process.env.ROLE_1B || ""
 };
 
-const STATS_WEBHOOK = "https://discord.com/api/webhooks/1444735456167198815/PKzp4YDhYTicTeYa1z15__FaYgWXq9QQVe30Ot9ymfW7MpcVVRbMb5Bsgmpguxj4HEwA";
-const STATS_UPDATE_INTERVAL = 10000;
-const BOT_TIMEOUT = 120000;
+const HIGHLIGHT_WEBHOOK = "https://discord.com/api/webhooks/1445566011767259257/jupLICUBkOa6OkYF4TY_b7gZ47NuEmGpHnZVMdW9jw7lUivYQlpYH1LOColrpZBBpgTe";
 
 // ======== PRIORITY NAMES ========
-const PRIORITY_NAMES = [
+const PRIORITY_NAMES = new Set([
   "La Taco Combinasion","La Secret Combinasion","Tang Tang Keletang",
   "Chipso and Queso","Garama and Madundung","La Casa Boo","Tictac Sahur",
   "Spooky and Pumpky","Dragon Cannelloni","Meowl","Strawberry Elephant",
@@ -41,374 +49,346 @@ const PRIORITY_NAMES = [
   "Spaghetti Tualetti","Nuclearo Dinossauro","Tralaledon","Los Hotspotsitos",
   "Chillin Chili","Los Primos","Los Tacoritas","Los Spaghettis",
   "Fragrama and Chocrama","Celularcini Viciosini"
-];
+]);
 
-const TIER_COLORS = {
-  "10m": 0x3498db,
-  "50m": 0x2ecc71,
-  "100m": 0xf1c40f,
-  "300m": 0xe67e22,
-  "1b": 0xe74c3c
-};
+// ======== HIGHLIGHT PRIORITY NAMES (always show in highlights) ========
+const HIGHLIGHT_PRIORITY_NAMES = new Set([
+  "Garama And Madundung",
+  "Garama and Madundung",  // Both cases
+  "Nuclearo Dinossauro",
+  "Ketupat Kepat"
+]);
 
-// ======== DATA ========
-let serverBuffers = {};
-let sentMessages = new Set();
-let activeBots = {};
-let statsMessageId = null;
-
-let logCounts = {
-  "10m": 0, "50m": 0, "100m": 0, "300m": 0, "1b": 0, "total": 0
-};
-
-// ======== AUTOJOINER (servers with FOUND brainrots) ========
-let autoJoinerServers = [];
-let autoJoinQueue = [];
-let jobBestMap = {};
-const AUTOJOINER_MAX_BUFFER = 5000;
-const AUTOJOINER_BUFFER_CLEAN_SEC = 120;
-
-// Clean autojoiner buffer periodically
-setInterval(() => {
-  autoJoinerServers = [];
-  console.log("🧹 autoJoinerServers cleared");
-}, AUTOJOINER_BUFFER_CLEAN_SEC * 1000);
-
-// ======== CLEANUP ========
-setInterval(() => {
-  sentMessages.clear();
-}, 15 * 60 * 1000);
-
-setInterval(() => {
-  const now = Date.now();
-  for (const botId in activeBots) {
-    if (now - activeBots[botId] > BOT_TIMEOUT) {
-      delete activeBots[botId];
-    }
+// ======== LRU CACHE FOR DEDUPLICATION ========
+class LRUCache {
+  constructor(maxSize, ttlMs) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.cache = new Map();
   }
-}, 30000);
+
+  has(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return false;
+    if (Date.now() > entry.expiry) {
+      this.cache.delete(key);
+      return false;
+    }
+    // Move to end (most recent)
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+    return true;
+  }
+
+  add(key) {
+    if (this.cache.size >= this.maxSize) {
+      // Remove oldest entry
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { expiry: Date.now() + this.ttlMs });
+  }
+
+  size() {
+    return this.cache.size;
+  }
+
+  clear() {
+    this.cache.clear();
+  }
+}
+
+// ======== STATE ========
+const sentMessages = new LRUCache(DEDUP_CACHE_SIZE, DEDUP_CACHE_TTL_MS);
+const serverBuffers = new Map();  // jobId -> brainrots[]
+const autoJoinerServers = [];
+const webhookQueue = [];
+let isProcessingQueue = false;
 
 // ======== HELPERS ========
-function formatMoney(value) {
-  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B/s`;
-  if (value >= 1e6) return `$${(value / 1e6).toFixed(0)}M/s`;
-  if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K/s`;
-  return `$${value}/s`;
+function getTierFromValue(value) {
+  if (value >= 1_000_000_000) return "1b";
+  if (value >= 300_000_000) return "300m";
+  if (value >= 100_000_000) return "100m";
+  if (value >= 50_000_000) return "50m";
+  if (value >= 10_000_000) return "10m";
+  return null;
 }
 
-function getTierLabel(tier) {
-  return {"10m": "10M+", "50m": "50M+", "100m": "100M+", "300m": "300M+", "1b": "1B+"}[tier] || tier;
+function getPriorityBrainrot(brainrots) {
+  if (!brainrots?.length) return null;
+  const priority = brainrots
+    .filter(b => PRIORITY_NAMES.has(b.name))
+    .sort((a, b) => b.value - a.value);
+  return priority[0] || null;
 }
 
-async function sendEmbed(webhook, content, embed, key) {
-  if (key && sentMessages.has(key)) return;
-  if (key) sentMessages.add(key);
-  
-  if (!webhook || webhook.includes("YOUR_")) return;
-
-  try {
-    await fetch(webhook, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({content: content || "", embeds: [embed]})
-    });
-    console.log(`✅ Sent: ${embed.title}`);
-  } catch (err) {
-    console.error(`❌ Send error:`, err.message);
-  }
-}
-
-// ======== STATS EMBED ========
-async function updateStatsEmbed() {
-  if (!STATS_WEBHOOK || STATS_WEBHOOK.includes("YOUR_")) return;
-
-  const now = new Date();
-  const activeBotsCount = Object.keys(activeBots).length;
-
-  const embed = {
-    title: "📊 Coverage Bot | Stats",
-    color: 0x2b2d31,
-    fields: [
-      {name: "10M+", value: `\`${logCounts["10m"]}\``, inline: true},
-      {name: "50M+", value: `\`${logCounts["50m"]}\``, inline: true},
-      {name: "100M+", value: `\`${logCounts["100m"]}\``, inline: true},
-      {name: "300M+", value: `\`${logCounts["300m"]}\``, inline: true},
-      {name: "1B+", value: `\`${logCounts["1b"]}\``, inline: true},
-      {name: "Total", value: `\`${logCounts["total"]}\``, inline: true},
-      {name: "Active Bots", value: `\`${activeBotsCount}\``, inline: true},
-    ],
-    footer: {text: `Updated: ${now.toLocaleTimeString()}`}
+function getEmbedColor(tier) {
+  const colors = {
+    "1b": 0x800080,    // Purple
+    "300m": 0xFF0000,  // Red
+    "100m": 0xFF4500,  // Orange-Red
+    "50m": 0xFFA500,   // Orange
+    "10m": 0xFFFF00    // Yellow
   };
-
-  try {
-    if (statsMessageId) {
-      const parts = STATS_WEBHOOK.split('/');
-      await fetch(`https://discord.com/api/webhooks/${parts[parts.length-2]}/${parts[parts.length-1]}/messages/${statsMessageId}`, {
-        method: "PATCH",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({embeds: [embed]})
-      });
-    } else {
-      const res = await fetch(`${STATS_WEBHOOK}?wait=true`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({embeds: [embed]})
-      });
-      const data = await res.json();
-      statsMessageId = data.id;
-    }
-  } catch (err) {
-    statsMessageId = null;
-  }
+  return colors[tier] || 0xFFFF00;
 }
 
-setInterval(updateStatsEmbed, STATS_UPDATE_INTERVAL);
-setTimeout(updateStatsEmbed, 5000);
-
-// ======== SEND LOOP ========
-setInterval(async () => {
-  for (const jobId in serverBuffers) {
-    const buffer = serverBuffers[jobId];
-    if (!buffer || buffer.length === 0) continue;
-
-    // Find highest tier
-    const has1b = buffer.some(b => b.value >= 1e9);
-    const has300 = buffer.some(b => b.value >= 3e8);
-    const has100 = buffer.some(b => b.value >= 1e8);
-    const has50 = buffer.some(b => b.value >= 5e7);
-
-    let tier = null;
-    if (has1b) tier = "1b";
-    else if (has300) tier = "300m";
-    else if (has100) tier = "100m";
-    else if (has50) tier = "50m";
-    else tier = "10m";
-
-    // Get brainrots for this tier
-    const list = buffer.filter(b => b.value >= 1e7).sort((a, b) => b.value - a.value);
-    if (list.length === 0) {
-      delete serverBuffers[jobId];
-      continue;
+// ======== WEBHOOK QUEUE PROCESSOR ========
+async function processWebhookQueue() {
+  if (isProcessingQueue || webhookQueue.length === 0) return;
+  
+  isProcessingQueue = true;
+  
+  while (webhookQueue.length > 0) {
+    const { webhook, content, embed, key } = webhookQueue.shift();
+    
+    try {
+      const resp = await fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: content || " ", embeds: [embed] })
+      });
+      
+      if (resp.status === 429) {
+        // Rate limited - put back in queue and wait
+        webhookQueue.unshift({ webhook, content, embed, key });
+        const retryAfter = parseInt(resp.headers.get('retry-after') || '5') * 1000;
+        console.log(`⏳ Rate limited, waiting ${retryAfter}ms`);
+        await sleep(retryAfter);
+      } else {
+        console.log(`✅ Sent: ${embed.title?.slice(0, 50)} [${key?.slice(0, 30)}]`);
+      }
+    } catch (err) {
+      console.error(`❌ Webhook error:`, err.message);
     }
+    
+    // Delay between sends to avoid rate limits
+    await sleep(WEBHOOK_BATCH_DELAY_MS);
+  }
+  
+  isProcessingQueue = false;
+}
 
-    const top = list[0];
+function queueWebhook(webhook, content, embed, uniqueKey) {
+  if (uniqueKey && sentMessages.has(uniqueKey)) {
+    return; // Skip duplicate
+  }
+  if (uniqueKey) sentMessages.add(uniqueKey);
+  
+  webhookQueue.push({ webhook, content, embed, key: uniqueKey });
+  processWebhookQueue();
+}
 
-    const fields = [
-      {name: "Name", value: top.name, inline: true},
-      {name: "Money/sec", value: formatMoney(top.value), inline: true},
-      {name: "Players", value: `${top.players}/8`, inline: true},
-      {name: "Job ID", value: `\`${jobId}\``, inline: false},
-      {name: "Join Script", value: `\`\`\`lua\ngame:GetService("TeleportService"):TeleportToPlaceInstance(109983668079237,"${jobId}",game.Players.LocalPlayer)\`\`\``, inline: false}
-    ];
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    if (list.length > 1) {
-      const others = list.slice(1, 5).map(b => `${b.name}: ${formatMoney(b.value)}`).join('\n');
-      fields.push({name: "Others", value: `\`\`\`\n${others}\`\`\``, inline: false});
+// ======== BUFFER PROCESSOR ========
+setInterval(() => {
+  for (const [jobId, buffer] of serverBuffers.entries()) {
+    if (!buffer?.length) continue;
+    
+    // Sort by value descending
+    buffer.sort((a, b) => b.value - a.value);
+    
+    // Determine best tier
+    const topValue = buffer[0].value;
+    const targetTier = getTierFromValue(topValue);
+    if (!targetTier) continue;
+    
+    // Build embed
+    const filtered = buffer.filter(b => b.value >= 10_000_000);
+    if (!filtered.length) continue;
+    
+    const lines = [`\`\`\`${jobId}\`\`\``];
+    
+    for (let i = 0; i < Math.min(filtered.length, 10); i++) {
+      const b = filtered[i];
+      const line = i === 0 && targetTier !== "10m"
+        ? `🥇 **__${b.name} — ${b.gen}__**`
+        : `**${b.name} — ${b.gen}**`;
+      lines.push(line);
     }
-
+    
+    if (filtered.length > 10) {
+      lines.push(`*...and ${filtered.length - 10} more*`);
+    }
+    
+    lines.push(`\n👥 **Players:** ${buffer[0].players}`);
+    
+    const priority = getPriorityBrainrot(filtered);
+    
     const embed = {
-      title: `Coverage Bot | ${getTierLabel(tier)}`,
-      color: TIER_COLORS[tier],
-      fields: fields,
-      footer: {text: `${Object.keys(activeBots).length} bots scanning`},
+      title: priority 
+        ? `⚡ ${priority.name} — ${priority.gen}`
+        : `⚡ High Value Server`,
+      description: lines.join("\n"),
+      color: getEmbedColor(targetTier),
+      footer: { text: "© YourNotifierName" },
       timestamp: new Date().toISOString()
     };
-
-    const key = `${jobId}_${tier}_${list.map(b => b.name).join("_")}`;
-    await sendEmbed(WEBHOOKS[tier], ROLE_MENTIONS[tier], embed, key);
-
-    delete serverBuffers[jobId];
+    
+    const namesKey = filtered.map(b => `${b.name}-${b.gen}`).sort().join("_").slice(0, 100);
+    const key = `main_${jobId}_${targetTier}_${namesKey}`;
+    
+    if (WEBHOOKS[targetTier]) {
+      queueWebhook(WEBHOOKS[targetTier], ROLE_MENTIONS[targetTier], embed, key);
+    }
+    
+    // Highlight for 100M+ OR special priority items
+    const hasHighlightPriority = filtered.some(b => HIGHLIGHT_PRIORITY_NAMES.has(b.name));
+    const shouldHighlight = topValue >= 100_000_000 || hasHighlightPriority;
+    
+    if (HIGHLIGHT_WEBHOOK && shouldHighlight) {
+      // Find the highlight priority brainrot if any
+      const highlightPriorityItem = filtered.find(b => HIGHLIGHT_PRIORITY_NAMES.has(b.name));
+      
+      const highlightEmbed = {
+        ...embed,
+        title: highlightPriorityItem 
+          ? `🌟 ${highlightPriorityItem.name} — ${highlightPriorityItem.gen}`
+          : priority 
+            ? `🌟 ${priority.name} — ${priority.gen}`
+            : `🌟 ${filtered[0].name} — ${filtered[0].gen}`,
+        color: hasHighlightPriority ? 0xFF00FF : 0xFFD700  // Magenta for priority, Gold for 100m+
+      };
+      queueWebhook(HIGHLIGHT_WEBHOOK, "", highlightEmbed, `highlight_${key}`);
+    }
+    
+    // Clear buffer
+    serverBuffers.delete(jobId);
   }
 }, 500);
 
-// ======== ENDPOINTS ========
+// ======== CLEANUP ========
+setInterval(() => {
+  autoJoinerServers.length = 0;
+  console.log("🧹 AutoJoiner buffer cleared");
+}, AUTOJOINER_BUFFER_CLEAN_SEC * 1000);
 
+// ======== ENDPOINTS ========
 app.post("/add-server", (req, res) => {
   try {
-    const {jobId, players, brainrots, botId, timestamp} = req.body;
-
-    if (!brainrots || !Array.isArray(brainrots) || !jobId) {
-      return res.sendStatus(400);
+    const { jobId, players, brainrots, timestamp } = req.body;
+    
+    if (!jobId || !brainrots?.length) {
+      return res.status(400).json({ error: "Missing jobId or brainrots" });
     }
-
-    if (botId) activeBots[botId] = Date.now();
-    if (!serverBuffers[jobId]) serverBuffers[jobId] = [];
-
+    
+    // Initialize buffer
+    if (!serverBuffers.has(jobId)) {
+      serverBuffers.set(jobId, []);
+    }
+    
+    const buffer = serverBuffers.get(jobId);
+    
     for (const b of brainrots) {
-      logCounts.total++;
-      if (b.value >= 1e9) logCounts["1b"]++;
-      else if (b.value >= 3e8) logCounts["300m"]++;
-      else if (b.value >= 1e8) logCounts["100m"]++;
-      else if (b.value >= 5e7) logCounts["50m"]++;
-      else if (b.value >= 1e7) logCounts["10m"]++;
-
-      // Add to autojoiner buffer (servers with 10M+ finds)
-      if (b.value >= 10_000_000 && autoJoinerServers.length < AUTOJOINER_MAX_BUFFER) {
+      const value = b.value || 0;
+      
+      // Add to buffer
+      buffer.push({
+        serverId: jobId,
+        name: b.name,
+        gen: b.gen,
+        value: value,
+        players: players || 0,
+        timestamp: timestamp || Math.floor(Date.now() / 1000)
+      });
+      
+      // Add to autojoiner if valuable
+      if (value >= 10_000_000 && autoJoinerServers.length < MAX_BUFFER_SIZE) {
         autoJoinerServers.push({
           jobId,
-          numericMPS: b.value,
+          numericMPS: value,
           name: b.name,
           gen: b.gen,
           players: players || 0,
-          brainrots,
           detectedAt: new Date().toISOString()
         });
       }
-
-      serverBuffers[jobId].push({
-        name: b.name,
-        gen: b.gen,
-        value: b.value,
-        tier: b.tier,
-        players: players || 0
-      });
-
-      // Track best per server for autoJoinQueue
-      const existing = jobBestMap[jobId];
-      if (!existing || b.value > (existing.value || 0)) {
-        jobBestMap[jobId] = {
-          jobId,
-          name: b.name,
-          ms: b.gen,
-          value: b.value,
-          players: players || 0,
-          timestamp: Math.floor(Date.now() / 1000)
-        };
-
-        if (!autoJoinQueue.some(e => e.jobId === jobId)) {
-          autoJoinQueue.push(jobBestMap[jobId]);
-        } else {
-          autoJoinQueue = autoJoinQueue.map(e => e.jobId === jobId ? jobBestMap[jobId] : e);
-        }
-      }
     }
-
-    console.log(`📩 ${jobId.substring(0,8)} | ${brainrots.length} brainrots | Bot: ${botId?.substring(0,10) || '-'}`);
-    return res.sendStatus(200);
+    
+    console.log(`📩 ${jobId} | ${brainrots.length} brainrots | ${players} players`);
+    res.sendStatus(200);
+    
   } catch (err) {
-    console.error("Error:", err);
-    return res.sendStatus(500);
+    console.error("add-server error:", err);
+    res.sendStatus(500);
   }
 });
 
-app.post("/heartbeat", (req, res) => {
-  const {botId} = req.body;
-  if (!botId) return res.status(400).json({error: "missing botId"});
-  activeBots[botId] = Date.now();
-  return res.json({activeBots: Object.keys(activeBots).length});
-});
-
-app.get("/status", (req, res) => {
-  res.json({
-    activeBots: Object.keys(activeBots).length,
-    bufferedServers: Object.keys(serverBuffers).length,
-    autoJoinerBuffered: autoJoinerServers.length,
-    queuedForAutoJoin: autoJoinQueue.length,
-    sentMessagesCacheSize: sentMessages.size,
-    logCounts
-  });
-});
-
-app.get("/active-bots", (req, res) => {
-  const bots = Object.entries(activeBots).map(([id, time]) => ({
-    id,
-    lastSeen: `${Math.floor((Date.now() - time) / 1000)}s ago`
-  }));
-  res.json({count: bots.length, bots});
-});
-
-app.get("/stats", (req, res) => res.json({logCounts, activeBots: Object.keys(activeBots).length}));
-
-app.post("/reset-stats", (req, res) => {
-  logCounts = {"10m": 0, "50m": 0, "100m": 0, "300m": 0, "1b": 0, "total": 0};
-  res.json({status: "reset"});
-});
-
-// ======== AUTOJOINER ENDPOINTS ========
-
+// AutoJoiner endpoints
 app.get("/Autojoiner", (req, res) => {
-  res.json(autoJoinerServers.slice());
+  // Return sorted by value (best first)
+  const sorted = [...autoJoinerServers].sort((a, b) => b.numericMPS - a.numericMPS);
+  res.json(sorted.slice(0, 100));
 });
 
 app.get("/get-server", (req, res) => {
-  if (!autoJoinQueue || autoJoinQueue.length === 0) {
-    return res.status(404).json({error: "no servers available"});
+  if (!autoJoinerServers.length) {
+    return res.status(404).json({ error: "No servers available" });
   }
-  const entry = autoJoinQueue.shift();
-  if (entry && entry.jobId) delete jobBestMap[entry.jobId];
-  return res.json(entry);
+  // Pop best server
+  autoJoinerServers.sort((a, b) => b.numericMPS - a.numericMPS);
+  const server = autoJoinerServers.shift();
+  res.json(server);
 });
 
 app.get("/get-servers", (req, res) => {
+  const sorted = [...autoJoinerServers].sort((a, b) => b.numericMPS - a.numericMPS);
   res.json({
-    job_ids: autoJoinQueue.map(e => ({
+    job_ids: sorted.slice(0, 50).map(e => ({
       jobId: e.jobId,
       name: e.name,
-      ms: e.ms,
-      players: e.players
+      ms: e.gen,
+      players: e.players,
+      value: e.numericMPS
     }))
   });
 });
 
-app.post("/remove-server", (req, res) => {
-  try {
-    const {jobId} = req.body;
-    if (!jobId) return res.status(400).json({error: "missing jobId"});
-
-    const beforeList = autoJoinerServers.length;
-    autoJoinerServers = autoJoinerServers.filter(s => s.jobId !== jobId);
-    const removedFromList = beforeList - autoJoinerServers.length;
-
-    const beforeQueue = autoJoinQueue.length;
-    autoJoinQueue = autoJoinQueue.filter(s => s.jobId !== jobId);
-    const removedFromQueue = beforeQueue - autoJoinQueue.length;
-
-    if (jobBestMap[jobId]) delete jobBestMap[jobId];
-
-    console.log(`🗑️ Removed ${jobId.substring(0,8)}... | List: -${removedFromList} | Queue: -${removedFromQueue}`);
-    return res.json({success: true, removed: removedFromList + removedFromQueue});
-  } catch (err) {
-    console.error("remove-server error:", err);
-    return res.sendStatus(500);
-  }
+app.get("/status", (req, res) => {
+  res.json({
+    serverBuffers: serverBuffers.size,
+    webhookQueueSize: webhookQueue.length,
+    autoJoinerBuffered: autoJoinerServers.length,
+    dedupCacheSize: sentMessages.size()
+  });
 });
 
 app.post("/add-pool", (req, res) => {
   const data = req.body;
-  if (!data || !Array.isArray(data.servers)) {
-    return res.status(400).json({error: "missing 'servers' array"});
+  if (!data?.servers?.length) {
+    return res.status(400).json({ error: "Missing 'servers' array" });
   }
-
+  
   let added = 0;
-
-  for (const j of data.servers) {
-    if (!j) continue;
-
-    if (!jobBestMap[j] && !autoJoinQueue.some(e => e.jobId === j)) {
-      const entry = {
-        jobId: j,
+  const existingIds = new Set(autoJoinerServers.map(s => s.jobId));
+  
+  for (const jobId of data.servers) {
+    if (jobId && !existingIds.has(jobId) && autoJoinerServers.length < MAX_BUFFER_SIZE) {
+      autoJoinerServers.push({
+        jobId,
+        numericMPS: 0,
         name: null,
-        ms: null,
-        value: 0,
+        gen: null,
         players: 0,
-        timestamp: Math.floor(Date.now() / 1000)
-      };
-      jobBestMap[j] = entry;
-      autoJoinQueue.push(entry);
+        detectedAt: new Date().toISOString()
+      });
+      existingIds.add(jobId);
       added++;
     }
   }
+  
+  res.json({ added });
+});
 
-  return res.json({added});
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: Date.now() });
 });
 
 // ======== START ========
 app.listen(PORT, () => {
-  console.log(`
-╔═══════════════════════════════════════╗
-║   COVERAGE WEBHOOK API v2.0           ║
-║   Clean • Fast • No Sharing           ║
-║   Port: ${PORT}                          ║
-╚═══════════════════════════════════════╝
-  `);
+  console.log(`✅ Optimized Notifier running on port ${PORT}`);
 });
