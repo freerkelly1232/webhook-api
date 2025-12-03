@@ -39,6 +39,10 @@ const ROLE_MENTIONS = {
 
 const HIGHLIGHT_WEBHOOK = "https://discord.com/api/webhooks/1445566011767259257/jupLICUBkOa6OkYF4TY_b7gZ47NuEmGpHnZVMdW9jw7lUivYQlpYH1LOColrpZBBpgTe";
 
+// Bot stats webhook - shows active bot count
+const BOT_STATS_WEBHOOK = "https://discord.com/api/webhooks/1445616403087495302/gNtvYYzBSvouwV0D0oGa7gjGWhAcJ6QvEbgsS838oJ8wOvvwoQO46IgdCK3tGIUuiZ0f";
+const BOT_STATS_INTERVAL_MS = 60000;  // Update every 60 seconds
+
 // ======== PRIORITY NAMES ========
 const PRIORITY_NAMES = new Set([
   "La Taco Combinasion","La Secret Combinasion","Tang Tang Keletang",
@@ -53,10 +57,14 @@ const PRIORITY_NAMES = new Set([
 
 // ======== HIGHLIGHT PRIORITY NAMES (always show in highlights) ========
 const HIGHLIGHT_PRIORITY_NAMES = new Set([
-  "Garama And Madundung",
-  "Garama and Madundung",  // Both cases
-  "Nuclearo Dinossauro",
-  "Ketupat Kepat"
+  "La Taco Combinasion","La Secret Combinasion","Tang Tang Keletang",
+  "Chipso and Queso","Garama and Madundung","Garama And Madundung","La Casa Boo","Tictac Sahur",
+  "Spooky and Pumpky","Dragon Cannelloni","Meowl","Strawberry Elephant",
+  "Burguro And Fryuro","Ketchuru and Musturu","La Supreme Combinasion",
+  "Ketupat Kepat","Capitano Moby","Headless Horseman","Money Money Puggy",
+  "Spaghetti Tualetti","Nuclearo Dinossauro","Tralaledon","Los Hotspotsitos",
+  "Chillin Chili","Los Primos","Los Tacoritas","Los Spaghettis",
+  "Fragrama and Chocrama","Celularcini Viciosini"
 ]);
 
 // ======== LRU CACHE FOR DEDUPLICATION ========
@@ -104,6 +112,42 @@ const serverBuffers = new Map();  // jobId -> brainrots[]
 const autoJoinerServers = [];
 const webhookQueue = [];
 let isProcessingQueue = false;
+
+// ======== ACTIVE BOT TRACKING ========
+const activeBots = new Map();  // botId -> { lastSeen: timestamp, name: string }
+const BOT_ACTIVE_TIMEOUT_MS = 120000;  // 2 minutes - bot considered inactive after this
+
+function trackBot(botId) {
+  if (!botId || botId === "Unknown") return;
+  activeBots.set(botId, {
+    lastSeen: Date.now(),
+    name: botId
+  });
+}
+
+function getActiveBotCount() {
+  const now = Date.now();
+  let count = 0;
+  for (const [botId, data] of activeBots.entries()) {
+    if (now - data.lastSeen < BOT_ACTIVE_TIMEOUT_MS) {
+      count++;
+    } else {
+      activeBots.delete(botId);  // Clean up inactive
+    }
+  }
+  return count;
+}
+
+function getActiveBotsList() {
+  const now = Date.now();
+  const active = [];
+  for (const [botId, data] of activeBots.entries()) {
+    if (now - data.lastSeen < BOT_ACTIVE_TIMEOUT_MS) {
+      active.push(botId);
+    }
+  }
+  return active;
+}
 
 // ======== HELPERS ========
 function getTierFromValue(value) {
@@ -332,6 +376,80 @@ setInterval(() => {
   console.log("🧹 AutoJoiner buffer cleared");
 }, AUTOJOINER_BUFFER_CLEAN_SEC * 1000);
 
+// ======== BOT STATS SENDER ========
+let lastBotStatsMessageId = null;
+
+async function sendBotStats() {
+  if (!BOT_STATS_WEBHOOK) return;
+  
+  const botCount = getActiveBotCount();
+  const botList = getActiveBotsList();
+  
+  const embed = {
+    title: "🤖 Xen Notifier | Bot Status",
+    color: botCount > 0 ? 0x00FF00 : 0xFF0000,  // Green if bots active, red if none
+    fields: [
+      {
+        name: "Active Bots",
+        value: `**${botCount}** bots scanning`,
+        inline: true
+      },
+      {
+        name: "Status",
+        value: botCount > 0 ? "🟢 Online" : "🔴 No bots active",
+        inline: true
+      }
+    ],
+    footer: { text: "Updates every 60 seconds • Xen Notifier" },
+    timestamp: new Date().toISOString()
+  };
+  
+  // Add bot list if not too many
+  if (botList.length > 0 && botList.length <= 20) {
+    embed.fields.push({
+      name: "Bot Names",
+      value: `\`\`\`\n${botList.join(', ')}\`\`\``,
+      inline: false
+    });
+  } else if (botList.length > 20) {
+    embed.fields.push({
+      name: "Bot Names",
+      value: `\`\`\`\n${botList.slice(0, 20).join(', ')}... and ${botList.length - 20} more\`\`\``,
+      inline: false
+    });
+  }
+  
+  try {
+    // Delete previous message if exists
+    if (lastBotStatsMessageId) {
+      try {
+        await fetch(`${BOT_STATS_WEBHOOK}/messages/${lastBotStatsMessageId}`, {
+          method: "DELETE"
+        });
+      } catch (e) { /* ignore delete errors */ }
+    }
+    
+    // Send new message
+    const resp = await fetch(`${BOT_STATS_WEBHOOK}?wait=true`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embeds: [embed] })
+    });
+    
+    if (resp.ok) {
+      const data = await resp.json();
+      lastBotStatsMessageId = data.id;
+      console.log(`📊 Bot stats sent: ${botCount} active bots`);
+    }
+  } catch (err) {
+    console.error("Bot stats error:", err.message);
+  }
+}
+
+// Send stats on startup and every interval
+setTimeout(sendBotStats, 5000);  // Initial delay
+setInterval(sendBotStats, BOT_STATS_INTERVAL_MS);
+
 // ======== ENDPOINTS ========
 app.post("/add-server", (req, res) => {
   try {
@@ -419,8 +537,25 @@ app.get("/status", (req, res) => {
     serverBuffers: serverBuffers.size,
     webhookQueueSize: webhookQueue.length,
     autoJoinerBuffered: autoJoinerServers.length,
-    dedupCacheSize: sentMessages.size()
+    dedupCacheSize: sentMessages.size(),
+    activeBotsCount: getActiveBotCount(),
+    activeBots: getActiveBotsList()
   });
+});
+
+// Dedicated bot stats endpoint
+app.get("/bots", (req, res) => {
+  res.json({
+    count: getActiveBotCount(),
+    bots: getActiveBotsList(),
+    timeout: BOT_ACTIVE_TIMEOUT_MS / 1000 + " seconds"
+  });
+});
+
+// Force send bot stats to webhook
+app.get("/bots/ping", async (req, res) => {
+  await sendBotStats();
+  res.json({ sent: true, count: getActiveBotCount() });
 });
 
 app.post("/add-pool", (req, res) => {
