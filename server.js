@@ -113,6 +113,10 @@ const autoJoinerServers = [];
 const webhookQueue = [];
 let isProcessingQueue = false;
 
+// ======== SCRIPT USER TRACKING ========
+const scriptUsers = new Map();  // jobId -> Map<userId, {username, timestamp}>
+const SCRIPT_USER_TIMEOUT_MS = 30000;  // 30 seconds timeout
+
 // ======== ACTIVE BOT TRACKING ========
 const activeBots = new Map();  // botId -> { lastSeen: timestamp, name: string }
 const BOT_ACTIVE_TIMEOUT_MS = 120000;  // 2 minutes - bot considered inactive after this
@@ -538,13 +542,21 @@ app.get("/get-servers", (req, res) => {
 });
 
 app.get("/status", (req, res) => {
+  // Count total script users across all servers
+  let totalScriptUsers = 0;
+  for (const users of scriptUsers.values()) {
+    totalScriptUsers += users.size;
+  }
+  
   res.json({
     serverBuffers: serverBuffers.size,
     webhookQueueSize: webhookQueue.length,
     autoJoinerBuffered: autoJoinerServers.length,
     dedupCacheSize: sentMessages.size(),
     activeBotsCount: getActiveBotCount(),
-    activeBots: getActiveBotsList()
+    activeBots: getActiveBotsList(),
+    scriptUsersCount: totalScriptUsers,
+    scriptUserServers: scriptUsers.size
   });
 });
 
@@ -615,6 +627,85 @@ app.get("/heartbeat/:botId", (req, res) => {
     res.status(400).json({ error: "Missing botId" });
   }
 });
+
+// ======== SCRIPT USER TRACKING (for player highlights) ========
+// Clean up expired script users
+function cleanupScriptUsers() {
+  const now = Date.now();
+  for (const [jobId, users] of scriptUsers.entries()) {
+    for (const [userId, data] of users.entries()) {
+      if (now - data.timestamp > SCRIPT_USER_TIMEOUT_MS) {
+        users.delete(userId);
+      }
+    }
+    if (users.size === 0) {
+      scriptUsers.delete(jobId);
+    }
+  }
+}
+
+// Register user as script user
+app.post("/register-user", (req, res) => {
+  const { userId, username, jobId } = req.body;
+  if (!userId || !jobId) {
+    return res.status(400).json({ error: "Missing userId or jobId" });
+  }
+  
+  if (!scriptUsers.has(jobId)) {
+    scriptUsers.set(jobId, new Map());
+  }
+  
+  scriptUsers.get(jobId).set(String(userId), {
+    username: username || "Unknown",
+    timestamp: Date.now()
+  });
+  
+  // Also track as active bot if username provided
+  if (username) {
+    trackBot(username);
+  }
+  
+  res.json({ registered: true });
+});
+
+// Get script users in a server
+app.get("/script-users", (req, res) => {
+  const jobId = req.query.jobId;
+  if (!jobId) {
+    return res.status(400).json({ error: "Missing jobId" });
+  }
+  
+  cleanupScriptUsers();
+  
+  const users = scriptUsers.get(jobId);
+  if (!users || users.size === 0) {
+    return res.json([]);
+  }
+  
+  const userIds = Array.from(users.keys()).map(id => parseInt(id));
+  res.json(userIds);
+});
+
+// Unregister user when leaving
+app.post("/unregister-user", (req, res) => {
+  const { userId, jobId } = req.body;
+  if (!userId || !jobId) {
+    return res.status(400).json({ error: "Missing userId or jobId" });
+  }
+  
+  const users = scriptUsers.get(jobId);
+  if (users) {
+    users.delete(String(userId));
+    if (users.size === 0) {
+      scriptUsers.delete(jobId);
+    }
+  }
+  
+  res.json({ unregistered: true });
+});
+
+// Cleanup interval
+setInterval(cleanupScriptUsers, 15000);
 
 // ======== START ========
 app.listen(PORT, () => {
