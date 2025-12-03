@@ -23,7 +23,7 @@ const DEDUP_CACHE_TTL_MS = 900000;    // 15 minutes
 // ======== WEBHOOKS ========
 const WEBHOOKS = {
   "10m": "https://discord.com/api/webhooks/1445565930104029205/k897On-Kq-djxkDsbYCL5YjXrSwaupxOzYEEFV6rMOL0CgzW-4VNa_zzSbqPFkLzfZmw",
-  "50m": "https://discord.com/api/webhooks/1445565737640136875/4OCEo_3LuuQf7JrqWSvNSEnHfjZ1PpisEV-v1M6qPifwxnCEAF5b84zbI5rlEZMVCdRB",
+  "50m": "https://discord.com/api/webhooks/1445565848973738086/ACqfk93B5u20N9stfnKaLns0eQhZ5LXkDYwCWeb0UYr9hvvFeAj6GwVYXeuTWfMFgIvr",
   "100m": "https://discord.com/api/webhooks/1445565737640136875/4OCEo_3LuuQf7JrqWSvNSEnHfjZ1PpisEV-v1M6qPifwxnCEAF5b84zbI5rlEZMVCdRB",
   "300m": "https://discord.com/api/webhooks/1445565671953010906/mfQb-npQF4az9t-Zb7CqHULcEUqvIvXSskQp7JYy4mKdFl3xicQkTgUJd5nnZ4w1uI9P",
   "1b": "https://discord.com/api/webhooks/1445565590508142733/Q9bBllVQZKREkpH9_t4YEwVrOgXwOzftXRDnwRXyIvWDyCX4GDedfmyU7nvmss1dN0lB"
@@ -282,12 +282,42 @@ setInterval(() => {
     const shouldHighlight = topValue >= 100_000_000 || hasHighlightPriority;
     
     if (HIGHLIGHT_WEBHOOK && shouldHighlight) {
-      // For highlights, just reuse the embed but change color for priority
+      // Build highlight embed WITHOUT Job ID and Join Script
+      const highlightFields = [
+        {
+          name: "Name",
+          value: topItem.name,
+          inline: true
+        },
+        {
+          name: "Money/sec",
+          value: formatMoney(topItem.value),
+          inline: true
+        },
+        {
+          name: "Players",
+          value: `${buffer[0].players}/8`,
+          inline: true
+        }
+      ];
+      
+      // Add "Others" if there are more brainrots
+      if (others) {
+        highlightFields.push({
+          name: "Others",
+          value: `\`\`\`\n${others}\`\`\``,
+          inline: false
+        });
+      }
+      
       const highlightEmbed = {
-        ...embed,
-        title: hasHighlightPriority ? `Xen Notifier | Priority` : embed.title,
-        color: hasHighlightPriority ? 0xFF00FF : embed.color  // Magenta for priority
+        title: hasHighlightPriority ? `Xen Notifier | Priority` : `Xen Notifier | ${tierLabel}`,
+        color: hasHighlightPriority ? 0xFF00FF : getEmbedColor(targetTier),
+        fields: highlightFields,
+        footer: { text: `Bot ${detectedBy} scanning • Xen Notifier` },
+        timestamp: new Date().toISOString()
       };
+      
       queueWebhook(HIGHLIGHT_WEBHOOK, "", highlightEmbed, `highlight_${key}`);
     }
     
