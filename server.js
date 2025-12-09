@@ -3,7 +3,7 @@
 // - Batched webhook sending (avoids rate limits)
 // - Efficient deduplication with LRU cache
 // - Priority queue for best servers
-// - Memory-efficient buffer management
+// - Memory-efficient buffer managemen
 
 const express = require("express");
 const fetch = require("node-fetch");
